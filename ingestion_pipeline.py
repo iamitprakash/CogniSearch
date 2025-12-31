@@ -4,8 +4,12 @@ from langchain_text_splitters import CharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from dotenv import load_dotenv
+import sys
 
 load_dotenv()
+
+# Option to use local embeddings instead of OpenAI (set USE_LOCAL_EMBEDDINGS=true in .env)
+USE_LOCAL_EMBEDDINGS = os.getenv("USE_LOCAL_EMBEDDINGS", "false").lower() == "true"
 
 def load_documents(docs_path="docs"):
     """Load all text files from the docs directory"""
@@ -63,24 +67,75 @@ def split_documents(documents, chunk_size=1000, chunk_overlap=0):
     
     return chunks
 
+def get_embedding_model():
+    """Get embedding model - either OpenAI or local"""
+    if USE_LOCAL_EMBEDDINGS:
+        try:
+            from langchain_community.embeddings import HuggingFaceEmbeddings
+            print("Using local HuggingFace embeddings (sentence-transformers)...")
+            embedding_model = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+            return embedding_model
+        except ImportError:
+            print("ERROR: HuggingFace embeddings not installed.")
+            print("Install it with: pip install sentence-transformers")
+            sys.exit(1)
+    else:
+        # Check if OpenAI API key is set
+        if not os.getenv("OPENAI_API_KEY"):
+            print("ERROR: OPENAI_API_KEY not found in environment variables.")
+            print("Please set it in your .env file or use local embeddings by setting USE_LOCAL_EMBEDDINGS=true")
+            sys.exit(1)
+        
+        print("Using OpenAI embeddings...")
+        return OpenAIEmbeddings(model="text-embedding-3-small")
+
 def create_vector_store(chunks, persist_directory="db/chroma_db"):
     """Create and persist ChromaDB vector store"""
     print("Creating embeddings and storing in ChromaDB...")
+    
+    try:
+        embedding_model = get_embedding_model()
         
-    embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
+        # Create ChromaDB vector store
+        print("--- Creating vector store ---")
+        vectorstore = Chroma.from_documents(
+            documents=chunks,
+            embedding=embedding_model,
+            persist_directory=persist_directory, 
+            collection_metadata={"hnsw:space": "cosine"}
+        )
+        print("--- Finished creating vector store ---")
+        
+        print(f"Vector store created and saved to {persist_directory}")
+        return vectorstore
     
-    # Create ChromaDB vector store
-    print("--- Creating vector store ---")
-    vectorstore = Chroma.from_documents(
-        documents=chunks,
-        embedding=embedding_model,
-        persist_directory=persist_directory, 
-        collection_metadata={"hnsw:space": "cosine"}
-    )
-    print("--- Finished creating vector store ---")
-    
-    print(f"Vector store created and saved to {persist_directory}")
-    return vectorstore
+    except Exception as e:
+        error_type = type(e).__name__
+        error_msg = str(e)
+        
+        if "RateLimitError" in error_type or "429" in error_msg or "quota" in error_msg.lower():
+            print("\n❌ ERROR: OpenAI API quota exceeded or rate limit reached.")
+            print("\nOptions to fix this:")
+            print("1. Check your OpenAI billing and quota at https://platform.openai.com/account/billing")
+            print("2. Use local embeddings instead by setting USE_LOCAL_EMBEDDINGS=true in your .env file")
+            print("   Then install: pip install sentence-transformers")
+            print("3. Wait and try again later if it's a rate limit issue")
+        elif "AuthenticationError" in error_type or "401" in error_msg or "authentication" in error_msg.lower():
+            print("\n❌ ERROR: OpenAI API authentication failed.")
+            print("Please check your OPENAI_API_KEY in your .env file")
+        elif "insufficient_quota" in error_msg.lower():
+            print("\n❌ ERROR: Insufficient OpenAI quota.")
+            print("Please check your plan and billing details at https://platform.openai.com/account/billing")
+            print("\nTo use local embeddings instead, set USE_LOCAL_EMBEDDINGS=true in your .env file")
+        else:
+            print(f"\n❌ ERROR: {error_type}: {error_msg}")
+            print("\nIf you're having API issues, consider using local embeddings:")
+            print("Set USE_LOCAL_EMBEDDINGS=true in your .env file")
+            print("Then install: pip install sentence-transformers")
+        
+        raise
 
 def main():
     """Main ingestion pipeline"""
@@ -94,14 +149,19 @@ def main():
     if os.path.exists(persistent_directory):
         print("✅ Vector store already exists. No need to re-process documents.")
         
-        embedding_model = OpenAIEmbeddings(model="text-embedding-3-small")
-        vectorstore = Chroma(
-            persist_directory=persistent_directory,
-            embedding_function=embedding_model, 
-            collection_metadata={"hnsw:space": "cosine"}
-        )
-        print(f"Loaded existing vector store with {vectorstore._collection.count()} documents")
-        return vectorstore
+        try:
+            embedding_model = get_embedding_model()
+            vectorstore = Chroma(
+                persist_directory=persistent_directory,
+                embedding_function=embedding_model, 
+                collection_metadata={"hnsw:space": "cosine"}
+            )
+            print(f"Loaded existing vector store with {vectorstore._collection.count()} documents")
+            return vectorstore
+        except Exception as e:
+            print(f"\n❌ ERROR loading existing vector store: {e}")
+            print("You may need to recreate it. Consider using local embeddings if you have API issues.")
+            raise
     
     print("Persistent directory does not exist. Initializing vector store...\n")
     
