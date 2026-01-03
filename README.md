@@ -1,6 +1,6 @@
-# 👋 Welcome to My RAG Experiments!
+# 🧠 Welcome to CogniSearch
 
-Hi there! Welcome to my playground for Retrieval-Augmented Generation (RAG). I built this repo to explore different ways to make RAG pipelines smarter, more reliable, and just plain better.
+Hi there! Welcome to **CogniSearch**, my advanced playground for Retrieval-Augmented Generation (RAG). I built this repo to explore different ways to make RAG pipelines smarter, more reliable, and just plain better.
 
 If you're looking to build your own RAG system or just curious about how things like *Agentic Chunking* or *Reciprocal Rank Fusion* work, you've come to the right place!
 
